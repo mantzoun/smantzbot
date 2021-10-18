@@ -7,8 +7,26 @@ import datetime
 import time
 from threading import Thread, Lock
 import mysql.connector as mysql
-from telegram import Update, ForceReply , Bot
+from telegram import Update, ForceReply , Bot, ParseMode
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from enum import Enum
+
+class Cmd(Enum):
+    HELP = 0
+    SET  = 1
+    DEL  = 2
+    QRY  = 3
+    FORT = 4
+    STRT = 5
+
+cmd_strings = {}
+cmd_strings[Cmd.HELP] = "/help"
+cmd_strings[Cmd.SET]  = "/set_alarm"
+cmd_strings[Cmd.DEL]  = "/delete_alarm"
+cmd_strings[Cmd.QRY]  = "/query_alarms"
+cmd_strings[Cmd.FORT] = "/fortune"
+cmd_strings[Cmd.STRT] = "/start"
+
 
 class AlarmItem:
     def __init__(self, a_id, c_id, t_stamp, t_str, a_info):
@@ -35,15 +53,58 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 logger = logging.getLogger(__name__)
 
-def start(update: Update, context: CallbackContext) -> None:
+def parse_command(update: Update):
+    command = ""
+    chat_id = 0
+    result = 0
+
+    if update.message != None:
+        command = update.message.text
+        chat_id = update.message.chat.id
+    elif update.edited_message != None:
+        command = update.edited_message.text
+        chat_id = update.edited_message.chat.id
+    else:
+        result = -1
+        logging.info("Error parsing command")
+
+    return command, chat_id, result
+
+def unknown_cmd(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text("Please type <b>/help</b> for available commands", parse_mode = ParseMode.HTML)
+
+def start_cmd(update: Update, context: CallbackContext) -> None:
     update.message.reply_text("Hello " + update.effective_user.username + "!")
 
-def fortune_command(update: Update, context: CallbackContext) -> None:
+def help_cmd(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text("These are the supported commands:\n" +
+            "<b>" + cmd_strings[Cmd.STRT] + "</b>" + "\n" +
+            "\t\tSay hello to MantzBot\n" +
+            "<b>" + cmd_strings[Cmd.FORT] + "</b>" + "\n" +
+            "\tGet a fortune cookie from fortune-mod (possibly NSFW)\n" +
+            "<b>" + cmd_strings[Cmd.SET] + "</b>" + "\n" +
+            "\tSet an alarm notification. For example:\n" +
+            "\t" + cmd_strings[Cmd.SET] + " 25/03/2021 08:00 - Independence Day\n" +
+            "<b>" + cmd_strings[Cmd.QRY] + "</b>" + "\n" +
+            "\tGet a list of active alarms for this chat\n" +
+            "<b>" + cmd_strings[Cmd.DEL] + "</b>" + "\n" +
+            "\tDelete an alarm notification, using the Alarm's ID. For example:\n" +
+            "\t" + cmd_strings[Cmd.DEL] + " 17\n" +
+            "<b>" + cmd_strings[Cmd.HELP] + "</b>" + "\n" +
+            "\tDisplay this help message\n",
+            parse_mode = ParseMode.HTML)
+
+def fortune_cmd(update: Update, context: CallbackContext) -> None:
     ret = subprocess.getoutput('fortune -a')
     update.message.reply_text(ret)
 
-def query_alarms(update: Update, context: CallbackContext) -> None:
-    chat_id = update.message.chat.id
+def query_alarms_cmd(update: Update, context: CallbackContext) -> None:
+    command, chat_id, result = parse_command(update)
+
+    if result != 0:
+        bot.send_message(chat_id, "Error parsing command")
+        return
+
     response = ""
 
     db_mutex.acquire()
@@ -60,16 +121,49 @@ def query_alarms(update: Update, context: CallbackContext) -> None:
 
     db_mutex.release()
 
-def set_alarm(update: Update, context: CallbackContext) -> None:
-    if update.message != None:
-        time_str = update.message.text[10:].split("-", 1)
-        chat_id = update.message.chat.id
-    elif update.edited_message != None:
-        time_str = update.edited_message.text[10:].split("-", 1)
-        chat_id = update.edited_message.chat.id
-    else:
-        logging.info("Error parsing command")
+def delete_alarm_cmd(update: Update, context: CallbackContext) -> None:
+    command, chat_id, result = parse_command(update)
+
+    if result != 0:
+        bot.send_message(chat_id, "Error parsing command")
         return
+
+    error = False
+    timestamp = 0
+    response = "Please provide a valid Alarm ID"
+
+    db_mutex.acquire()
+
+    try:
+        alarm_id = int(command[len(cmd_strings[Cmd.DEL]):].strip())
+    except:
+        error = True
+
+    if error == False:
+        for a in alarm_list:
+            if a.chat_id == chat_id and a.alarm_id == alarm_id:
+                alarm_list.remove(a)
+                response = "Alarm deleted"
+
+                try:
+                    query = "DELETE FROM ALARMS WHERE id = "+ str(alarm_id) +" AND chat_id = " + str(chat_id) +" ;"
+                    cursor.execute(query)
+                    db.commit()
+                except:
+                    logger.warning("Error removing alarm from database")
+                    response = "Error removing alarm from database"
+
+    db_mutex.release()
+    bot.send_message(chat_id, response)
+
+def set_alarm_cmd(update: Update, context: CallbackContext) -> None:
+    command, chat_id, result = parse_command(update)
+
+    if result != 0:
+        bot.send_message(chat_id, "Error parsing command")
+        return
+
+    time_str = command[len(cmd_strings[Cmd.SET]):].split("-", 1)
 
     db_mutex.acquire()
 
@@ -98,7 +192,7 @@ def set_alarm(update: Update, context: CallbackContext) -> None:
             db.commit()
             a_item = AlarmItem(cursor.lastrowid, chat_id, timestamp, dt, at)
             add_alarm_to_alarm_list(a_item)
-            #display_alarm_list()
+
             response = "Alarm registered, alarm ID: " + str(a_item.alarm_id)
             logger.info("Alarm registered " + a_item.str())
         except:
@@ -196,7 +290,6 @@ def main() -> None:
 
 
     populate_alarm_list()
-    #display_alarm_list()
 
     db_mutex = Lock()
 
@@ -209,12 +302,14 @@ def main() -> None:
 
     dispatcher = updater.dispatcher
 
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("fortune", fortune_command))
-    dispatcher.add_handler(CommandHandler("set_alarm", set_alarm))
-    dispatcher.add_handler(CommandHandler("query_alarms", query_alarms))
+    dispatcher.add_handler(CommandHandler("start", start_cmd))
+    dispatcher.add_handler(CommandHandler("fortune", fortune_cmd))
+    dispatcher.add_handler(CommandHandler("set_alarm", set_alarm_cmd))
+    dispatcher.add_handler(CommandHandler("query_alarms", query_alarms_cmd))
+    dispatcher.add_handler(CommandHandler("delete_alarm", delete_alarm_cmd))
+    dispatcher.add_handler(CommandHandler("help", help_cmd))
 
-    #dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, show_help))
+    dispatcher.add_handler(MessageHandler(Filters.command, unknown_cmd))
 
     updater.start_polling()
     updater.idle()
