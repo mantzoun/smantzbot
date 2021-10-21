@@ -18,6 +18,7 @@ class Cmd(Enum):
     QRY  = 3
     FORT = 4
     STRT = 5
+    TZ   = 6
 
 cmd_strings = {}
 cmd_strings[Cmd.HELP] = "/help"
@@ -26,6 +27,7 @@ cmd_strings[Cmd.DEL]  = "/delete_alarm"
 cmd_strings[Cmd.QRY]  = "/query_alarms"
 cmd_strings[Cmd.FORT] = "/fortune"
 cmd_strings[Cmd.STRT] = "/start"
+cmd_strings[Cmd.TZ]   = "/timezone"
 
 
 class AlarmItem:
@@ -57,27 +59,33 @@ def parse_command(update: Update):
     command = ""
     chat_id = 0
     result = 0
+    message = None
 
     if update.message != None:
         command = update.message.text
         chat_id = update.message.chat.id
+        message = update.message
     elif update.edited_message != None:
         command = update.edited_message.text
         chat_id = update.edited_message.chat.id
+        message = update.edited_message
     else:
         result = -1
         logging.info("Error parsing command")
 
-    return command, chat_id, result
+    return message, command, chat_id, result
 
 def unknown_cmd(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Please type <b>/help</b> for available commands", parse_mode = ParseMode.HTML)
+    message = parse_command(update)[0]
+    message.reply_text("Please type <b>/help</b> for available commands", parse_mode = ParseMode.HTML)
 
 def start_cmd(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Hello " + update.effective_user.username + "!")
+    message = parse_command(update)[0]
+    message.reply_text("Hello " + update.effective_user.first_name + "!")
 
 def help_cmd(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("These are the supported commands:\n" +
+    message = parse_command(update)[0]
+    message.reply_text("These are the supported commands:\n" +
             "<b>" + cmd_strings[Cmd.STRT] + "</b>" + "\n" +
             "\t\tSay hello to MantzBot\n" +
             "<b>" + cmd_strings[Cmd.FORT] + "</b>" + "\n" +
@@ -90,21 +98,19 @@ def help_cmd(update: Update, context: CallbackContext) -> None:
             "<b>" + cmd_strings[Cmd.DEL] + "</b>" + "\n" +
             "\tDelete an alarm notification, using the Alarm's ID. For example:\n" +
             "\t" + cmd_strings[Cmd.DEL] + " 17\n" +
+            "<b>" + cmd_strings[Cmd.TZ] + "</b>" + "\n" +
+            "\tSet or display the timezone offset for this chat. For example:\n" +
+            "\t" + cmd_strings[Cmd.TZ] + " +3\n" +
             "<b>" + cmd_strings[Cmd.HELP] + "</b>" + "\n" +
             "\tDisplay this help message\n",
             parse_mode = ParseMode.HTML)
 
 def fortune_cmd(update: Update, context: CallbackContext) -> None:
+    message = parse_command(update)[0]
     ret = subprocess.getoutput('fortune -a')
-    update.message.reply_text(ret)
+    message.reply_text(ret)
 
-def query_alarms_cmd(update: Update, context: CallbackContext) -> None:
-    command, chat_id, result = parse_command(update)
-
-    if result != 0:
-        bot.send_message(chat_id, "Error parsing command")
-        return
-
+def get_printable_alarms(chat_id: int) -> str:
     response = ""
 
     db_mutex.acquire()
@@ -117,25 +123,36 @@ def query_alarms_cmd(update: Update, context: CallbackContext) -> None:
     if response == "":
         response = "No active alarms"
 
-    bot.send_message(chat_id, response)
-
     db_mutex.release()
 
-def delete_alarm_cmd(update: Update, context: CallbackContext) -> None:
-    command, chat_id, result = parse_command(update)
+    return response
+
+def query_alarms_cmd(update: Update, context: CallbackContext) -> None:
+    message, command, chat_id, result = parse_command(update)
 
     if result != 0:
-        bot.send_message(chat_id, "Error parsing command")
+        message.reply_text("Error parsing command")
+        return
+
+    message.reply_text(get_printable_alarms(chat_id))
+
+def delete_alarm_cmd(update: Update, context: CallbackContext) -> None:
+    message, command, chat_id, result = parse_command(update)
+
+    if result != 0:
+        message.reply_text("Error parsing command")
         return
 
     error = False
     timestamp = 0
     response = "Please provide a valid Alarm ID"
 
+    args = command.split(" ", 1)
+
     db_mutex.acquire()
 
     try:
-        alarm_id = int(command[len(cmd_strings[Cmd.DEL]):].strip())
+        alarm_id = int(args[1])
     except:
         error = True
 
@@ -154,54 +171,65 @@ def delete_alarm_cmd(update: Update, context: CallbackContext) -> None:
                     response = "Error removing alarm from database"
 
     db_mutex.release()
-    bot.send_message(chat_id, response)
+    message.reply_text(response)
 
 def set_alarm_cmd(update: Update, context: CallbackContext) -> None:
-    command, chat_id, result = parse_command(update)
+    message, command, chat_id, result = parse_command(update)
 
     if result != 0:
-        bot.send_message(chat_id, "Error parsing command")
+        message.reply_text("Error parsing command")
         return
-
-    time_str = command[len(cmd_strings[Cmd.SET]):].split("-", 1)
-
-    db_mutex.acquire()
 
     error = False
     timestamp = 0
     response = "Alarm format is DD/MM/YYY HH:MM - Alarm tag"
 
-    if len(time_str) != 2:
+    args_tmp = command.split(" ", 1)
+
+    if len(args_tmp) != 2:
         error = True
     else:
-        try:
-            dt = time_str[0].strip()
-            at = time_str[1].strip()
+        args = args_tmp[1].split("-", 1)
 
-            timestamp = int(round((time.mktime(datetime.datetime.strptime(dt, "%d/%m/%Y %H:%M").timetuple()))))
-        except:
-            error = True;
+        if len(args) != 2:
+            error = True
+        else:
+            try:
+                alarm_time = args[0].strip()
+                alarm_info = args[1].strip()
+
+                timestamp = int(round((time.mktime(datetime.datetime.strptime(alarm_time, "%d/%m/%Y %H:%M").timetuple()))))
+            except:
+                error = True;
 
     if error == False:
+        db_mutex.acquire()
+
         query = "INSERT INTO ALARMS (timestamp, chat_id, date_str, alarm_str) VALUES (%s, %s, %s, %s)"
-        values = (str(timestamp), str(chat_id), dt, at)
+        values = (str(timestamp), str(chat_id), alarm_time, alarm_info)
+        logger.info("query values " + str(timestamp) + " " + str(chat_id) + " " + alarm_time + " " + alarm_info)
 
         try:
             cursor.execute(query, values)
 
             db.commit()
-            a_item = AlarmItem(cursor.lastrowid, chat_id, timestamp, dt, at)
+            a_item = AlarmItem(cursor.lastrowid, chat_id, timestamp, alarm_time, alarm_info)
             add_alarm_to_alarm_list(a_item)
 
             response = "Alarm registered, alarm ID: " + str(a_item.alarm_id)
             logger.info("Alarm registered " + a_item.str())
-        except:
-            logger.warning("Error adding alarm to database")
+        except Exception as e:
+            logger.warning("Error adding alarm to database: " + str(e))
             response = "Error adding alarm to database"
 
-    db_mutex.release()
+        db_mutex.release()
 
-    bot.send_message(chat_id, response)
+    message.reply_text(response)
+
+def timezone_cmd(update: Update, context: CallbackContext) -> None:
+    message = parse_command(update)[0]
+
+    message.reply_text("placeholder")
 
 def add_alarm_to_alarm_list(alarm: AlarmItem):
     index = 0;
@@ -308,6 +336,7 @@ def main() -> None:
     dispatcher.add_handler(CommandHandler("query_alarms", query_alarms_cmd))
     dispatcher.add_handler(CommandHandler("delete_alarm", delete_alarm_cmd))
     dispatcher.add_handler(CommandHandler("help", help_cmd))
+    dispatcher.add_handler(CommandHandler("timezone", timezone_cmd))
 
     dispatcher.add_handler(MessageHandler(Filters.command, unknown_cmd))
 
