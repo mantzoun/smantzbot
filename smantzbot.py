@@ -57,6 +57,27 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 logger = logging.getLogger(__name__)
 
+def sql_connect() -> None:
+    global db
+    global cursor
+
+    db_mutex.acquire()
+
+    db = mysql.connect(
+        host = "localhost",
+        user = config.user,
+        passwd = config.password ,
+        database = 'MANTZBOT'
+    )
+
+    cursor = db.cursor()
+
+def sql_disconnect() -> None:
+    cursor.close()
+    db.close()
+
+    db_mutex.release()
+
 def parse_command(update: Update):
     command = ""
     chat_id = 0
@@ -115,7 +136,7 @@ def fortune_cmd(update: Update, context: CallbackContext) -> None:
 def get_printable_alarms(chat_id: int) -> str:
     response = ""
 
-    db_mutex.acquire()
+    sql_connect()
 
     for a in alarm_list:
         if a.chat_id == chat_id:
@@ -125,7 +146,7 @@ def get_printable_alarms(chat_id: int) -> str:
     if response == "":
         response = "No active alarms"
 
-    db_mutex.release()
+    sql_disconnect()
 
     return response
 
@@ -151,7 +172,7 @@ def delete_alarm_cmd(update: Update, context: CallbackContext) -> None:
 
     args = command.split(" ", 1)
 
-    db_mutex.acquire()
+    sql_connect()
 
     try:
         alarm_id = int(args[1])
@@ -172,7 +193,7 @@ def delete_alarm_cmd(update: Update, context: CallbackContext) -> None:
                     logger.warning("Error removing alarm from database")
                     response = "Error removing alarm from database"
 
-    db_mutex.release()
+    sql_disconnect()
     message.reply_text(response)
 
 def set_alarm_cmd(update: Update, context: CallbackContext) -> None:
@@ -205,7 +226,7 @@ def set_alarm_cmd(update: Update, context: CallbackContext) -> None:
                 error = True;
 
     if error == False:
-        db_mutex.acquire()
+        sql_connect()
 
         query = "INSERT INTO ALARMS (timestamp, chat_id, date_str, alarm_str) VALUES (%s, %s, %s, %s)"
         values = (str(timestamp), str(chat_id), alarm_time, alarm_info)
@@ -224,7 +245,7 @@ def set_alarm_cmd(update: Update, context: CallbackContext) -> None:
             logger.warning("Error adding alarm to database: " + str(e))
             response = "Error adding alarm to database"
 
-        db_mutex.release()
+        sql_disconnect()
 
     message.reply_text(response)
 
@@ -242,7 +263,9 @@ def add_alarm_to_alarm_list(alarm: AlarmItem):
 
     alarm_list.insert(index, alarm)
 
-def populate_alarm_list() -> None:
+def populate_alarm_list():
+    sql_connect()
+
     query = "SELECT * FROM ALARMS"
     cursor.execute(query)
 
@@ -252,6 +275,8 @@ def populate_alarm_list() -> None:
         a_item = AlarmItem(x[0], x[2], x[1], x[3], x[4])
         add_alarm_to_alarm_list(a_item)
 
+    sql_disconnect()
+
 def display_alarm_list() -> None:
     for alarm in alarm_list:
         print(alarm.str())
@@ -260,7 +285,9 @@ def timer_thread():
     while True:
         ts = datetime.datetime.now().timestamp()
         logger.info("Timer loop")
-        db_mutex.acquire()
+
+        sql_connect()
+
         while len(alarm_list) > 0 and alarm_list[0].timestamp < ts:
             alarm = alarm_list.pop(0)
             message = alarm.time_str + ", " + alarm.alarm_info + " (Alarm id: " + str(alarm.alarm_id) + ")"
@@ -274,31 +301,13 @@ def timer_thread():
             except:
                 logger.warning("Could not remove alarm from database, id " + str(alarm.alarm_id))
 
-        db_mutex.release()
+        sql_disconnect()
 
         time.sleep(30)
 
-def main() -> None:
-    global bot
-    global alarm_list
-    global db
-    global cursor
-    global db_mutex
-
-    updater = Updater(config.token)
-    bot = Bot(config.token)
-    alarm_list = []
-
-    logger.info("Bot started")
-
-    db = mysql.connect(
-        host = "localhost",
-        user = config.user,
-        passwd = config.password,
-        database = 'MANTZBOT'
-    )
-
-    cursor = db.cursor()
+def init_sql_tables() -> int:
+    sql_connect()
+    ret = 0;
 
     cursor.execute("""
         SELECT COUNT(*)
@@ -317,11 +326,27 @@ def main() -> None:
             logger.info("Table created")
         except:
             logger.warning("Could not create table")
+            ret = -1
 
+    sql_disconnect()
+    return ret
 
-    populate_alarm_list()
+def main() -> None:
+    global bot
+    global alarm_list
+    global db_mutex
+
+    updater = Updater(config.token)
+    bot = Bot(config.token)
+    alarm_list = []
+
+    logger.info("Bot started")
 
     db_mutex = Lock()
+
+    init_sql_tables()
+
+    populate_alarm_list()
 
     try:
         t = Thread(target = timer_thread, args = ())
