@@ -11,6 +11,8 @@ from telegram import Update, ForceReply , Bot, ParseMode
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from enum import Enum
 
+import config
+
 class Cmd(Enum):
     HELP = 0
     SET  = 1
@@ -283,16 +285,16 @@ def main() -> None:
     global cursor
     global db_mutex
 
-    updater = Updater("BOT_KEY")
-    bot = Bot("BOT_KEY")
+    updater = Updater(config.token)
+    bot = Bot(config.token)
     alarm_list = []
 
     logger.info("Bot started")
 
     db = mysql.connect(
         host = "localhost",
-        user = "",
-        passwd = "",
+        user = config.user,
+        passwd = config.password,
         database = 'MANTZBOT'
     )
 
