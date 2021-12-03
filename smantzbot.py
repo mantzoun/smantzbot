@@ -140,7 +140,7 @@ def help_cmd(update: Update, context: CallbackContext) -> None:
             "\t" + cmd_strings[Cmd.DEL] + " 17\n" +
             "<b>" + cmd_strings[Cmd.TZ] + "</b>" + "\n" +
             "\tSet or display the timezone offset for this chat. For example:\n" +
-            "\t" + cmd_strings[Cmd.TZ] + " +3\n" +
+            "\t" + cmd_strings[Cmd.TZ] + " +03:00\n" +
             "<b>" + cmd_strings[Cmd.HELP] + "</b>" + "\n" +
             "\tDisplay this help message\n",
             parse_mode = ParseMode.HTML)
@@ -266,10 +266,71 @@ def set_alarm_cmd(update: Update, context: CallbackContext) -> None:
 
     message.reply_text(response)
 
-def timezone_cmd(update: Update, context: CallbackContext) -> None:
-    message = parse_command(update)[0]
+def get_chat_time_offset(chat_id: int) -> int:
+    query = "SELECT offset FROM TIME_OFFSETS WHERE chat_id = " + str(chat_id)
+    cursor.execute(query)
 
-    message.reply_text("placeholder")
+    res = cursor.fetchone()
+    if res == None:
+        return None
+    else:
+        return int(res)
+
+def timezone_cmd(update: Update, context: CallbackContext) -> None:
+    message, command, chat_id, result = parse_command(update)
+
+    if result != 0:
+        message.reply_text("Error parsing command")
+        return
+
+    args_tmp = command.split(" ", 1)
+
+    response = "could not parse time offset"
+
+    if len(args_tmp) != 2:
+        # no arguments, display currently set timezone
+        ret = get_chat_time_offset(chat_id)
+
+        if ret == None:
+           response = "Time offset from GMT has not been set for this chat. " +\
+                    "Please use the <b>" + cmd_strings[Cmd.TZ] + "</b> command to set " +\
+                    "the local time offset from GMT. For example:\n" +\
+                    "\t" + cmd_strings[Cmd.TZ] + " +03:00\n" +\
+                    "GMT time now is " + time.strftime("%d/%m/%Y %H:%M", time.gmtime())
+        else:
+            sign = "+" if (ret >= 0) else "-"
+            respone = "Time offset from GMT is " +\
+                    sign + str(abs(ret)/60) + ":" + str(abs(ret)%60)
+
+    else:
+        # parse and store provided argument
+        args = args_tmp[1].split(":")
+
+        if len(args) == 1:
+            # only one argumentm, assume it is hours
+            try:
+                offset = int(args[0]) * 3600
+
+                response = "Setting offset from GMT to " + str(offset) +\
+                        "\nYour local time is " + time.strftime("%d/%m/%Y %H:%M", time.gmtime(time.time() + offset))
+            except Exception as e:
+                logging.info("could not parse time offset " + str(args) + ", " + str(e))
+        elif len(args) == 2:
+            try:
+                offset = int(args[0]) * 3600
+                if int(args[1]) < 60 and int(args[1]) >= 0:
+                    if offset >= 0:
+                        offset += int(args[1]) * 60
+                    else:
+                        offset -= int(args[1]) * 60
+
+                    response = "Setting offset from GMT to " + str(offset) +\
+                            "\nYour local time is " + time.strftime("%d/%m/%Y %H:%M", time.gmtime(time.time() + offset))
+
+            except Exception as e:
+                logging.info("could not parse time offset " + str(args) + ", " + str(e))
+
+    message.reply_text(response, parse_mode = ParseMode.HTML)
 
 def add_alarm_to_alarm_list(alarm: AlarmItem):
     index = 0;
@@ -332,7 +393,7 @@ def init_sql_tables() -> int:
         WHERE table_name = 'ALARMS'""")
 
     if cursor.fetchone()[0] == 1:
-        logger.info("Table found")
+        logger.info("Alarm table found")
     else:
         try:
             cursor.execute("CREATE TABLE ALARMS (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, "
@@ -340,9 +401,25 @@ def init_sql_tables() -> int:
                 "chat_id BIGINT, "
                 "date_str VARCHAR(20), "
                 "alarm_str VARCHAR(255))")
-            logger.info("Table created")
+            logger.info("Alarm table created")
         except:
             logger.warning("Could not create table")
+            ret = -1
+
+    cursor.execute("""
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_name = 'TIME_OFFSETS'""")
+
+    if cursor.fetchone()[0] == 1:
+        logger.info("Time offset table found")
+    else:
+        try:
+            cursor.execute("CREATE TABLE TIME_OFFSETS (chat_id BIGINT NOT NULL PRIMARY KEY, "
+                "offset INT)")
+            logger.info("Time offset table created")
+        except:
+            logger.warning("Could not create time offset table")
             ret = -1
 
     sql_disconnect()
