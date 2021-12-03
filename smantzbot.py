@@ -11,7 +11,9 @@ from telegram import Update, ForceReply , Bot, ParseMode
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from enum import Enum
 from googlesearch import search
+import paramiko
 
+import my_devices
 import config
 
 class Cmd(Enum):
@@ -30,7 +32,6 @@ cmd_strings[Cmd.DEL]  = "/delete_alarm"
 cmd_strings[Cmd.QRY]  = "/query_alarms"
 cmd_strings[Cmd.FORT] = "/fortune"
 cmd_strings[Cmd.STRT] = "/start"
-cmd_strings[Cmd.TZ]   = "/timezone"
 
 
 class AlarmItem:
@@ -138,9 +139,6 @@ def help_cmd(update: Update, context: CallbackContext) -> None:
             "<b>" + cmd_strings[Cmd.DEL] + "</b>" + "\n" +
             "\tDelete an alarm notification, using the Alarm's ID. For example:\n" +
             "\t" + cmd_strings[Cmd.DEL] + " 17\n" +
-            "<b>" + cmd_strings[Cmd.TZ] + "</b>" + "\n" +
-            "\tSet or display the timezone offset for this chat. For example:\n" +
-            "\t" + cmd_strings[Cmd.TZ] + " +3\n" +
             "<b>" + cmd_strings[Cmd.HELP] + "</b>" + "\n" +
             "\tDisplay this help message\n",
             parse_mode = ParseMode.HTML)
@@ -266,10 +264,61 @@ def set_alarm_cmd(update: Update, context: CallbackContext) -> None:
 
     message.reply_text(response)
 
-def timezone_cmd(update: Update, context: CallbackContext) -> None:
-    message = parse_command(update)[0]
+def ssh_init() -> paramiko.SSHClient:
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(hostname = config.ssh_addr, port = config.ssh_port, username = config.ssh_uname)
 
-    message.reply_text("placeholder")
+        return ssh
+    except Exception as e:
+        logger.warning("Could not connect to server " + str(e))
+        return None
+
+def thermo_cmd(update: Update, context: CallbackContext) -> None:
+
+    message, command, chat_id, result = parse_command(update)
+
+    if is_valid_user(chat_id) == False:
+        message.reply_text("Invalid User")
+        return
+
+    try:
+        ssh = ssh_init()
+
+        if ssh == None:
+            message.reply_text("Could not connect to mosquitto server")
+            return
+
+        thermo = my_devices.MQTT_Device(config.thermo_id, config.mqtt_user, config.mqtt_pass)
+        thermo.set_ssh_handle(ssh)
+
+        args = command.split(" ", 1)
+
+        if len(args) != 2:
+            res = thermo.status()
+            message.reply_text("thermo status is " + res)
+        else:
+            cmd = args[1]
+
+            if cmd == "ON" or cmd == "on":
+                res = thermo.set_on()
+            elif cmd == "OFF" or cmd == "off":
+                res = thermo.set_off()
+            else:
+                res = "Wrong Command"
+
+            if res != "":
+                message.reply_text(res)
+
+        ssh.close()
+    except Exception as e:
+        print(str(e))
+        message.reply_text("Raised exception " + str(e))
+
+    return
+
 
 def add_alarm_to_alarm_list(alarm: AlarmItem):
     index = 0;
@@ -380,7 +429,7 @@ def main() -> None:
     dispatcher.add_handler(CommandHandler("query_alarms", query_alarms_cmd))
     dispatcher.add_handler(CommandHandler("delete_alarm", delete_alarm_cmd))
     dispatcher.add_handler(CommandHandler("help", help_cmd))
-    dispatcher.add_handler(CommandHandler("timezone", timezone_cmd))
+    dispatcher.add_handler(CommandHandler("thermo", thermo_cmd))
 
     dispatcher.add_handler(MessageHandler(Filters.command, unknown_cmd))
 
