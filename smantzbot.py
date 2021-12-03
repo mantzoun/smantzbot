@@ -10,6 +10,7 @@ import mysql.connector as mysql
 from telegram import Update, ForceReply , Bot, ParseMode
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from enum import Enum
+from googlesearch import search
 
 import config
 
@@ -99,8 +100,19 @@ def parse_command(update: Update):
     return message, command, chat_id, result
 
 def unknown_cmd(update: Update, context: CallbackContext) -> None:
-    message = parse_command(update)[0]
-    message.reply_text("Please type <b>/help</b> for available commands", parse_mode = ParseMode.HTML)
+    #Unknown command, do a google search with the provided string
+    message, command, _, _ = parse_command(update)
+
+    try:
+        for i in search(query=command, stop = 1, pause = 2):
+            res = i
+
+        message.reply_text("Please type <b>/help</b> for available commands\n" +
+            "search result for " + command + "\n" + res,
+            parse_mode = ParseMode.HTML)
+    except Exception as e:
+        print(str(e))
+        message.reply_text("Please type <b>/help</b> for available commands", parse_mode = ParseMode.HTML)
 
 def start_cmd(update: Update, context: CallbackContext) -> None:
     message = parse_command(update)[0]
