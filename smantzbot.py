@@ -57,6 +57,11 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 logger = logging.getLogger(__name__)
 
+def is_valid_user(chat_id: int) -> bool:
+    if chat_id in config.valid_chats:
+        return True
+    return False
+
 def sql_connect() -> None:
     global db
     global cursor
@@ -103,8 +108,8 @@ def unknown_cmd(update: Update, context: CallbackContext) -> None:
     message.reply_text("Please type <b>/help</b> for available commands", parse_mode = ParseMode.HTML)
 
 def start_cmd(update: Update, context: CallbackContext) -> None:
-    message = parse_command(update)[0]
-    message.reply_text("Hello " + update.effective_user.first_name + "!")
+    message, _, chat_id, _ = parse_command(update)
+    message.reply_text("Hello " + update.effective_user.first_name + "!. Chat ID is " + str(chat_id))
 
 def help_cmd(update: Update, context: CallbackContext) -> None:
     message = parse_command(update)[0]
