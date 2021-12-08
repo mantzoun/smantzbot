@@ -276,7 +276,7 @@ def ssh_init() -> paramiko.SSHClient:
         logger.warning("Could not connect to server " + str(e))
         return None
 
-def thermo_cmd(update: Update, context: CallbackContext) -> None:
+def dev_cmd(update: Update, context: CallbackContext) -> None:
 
     message, command, chat_id, result = parse_command(update)
 
@@ -291,26 +291,45 @@ def thermo_cmd(update: Update, context: CallbackContext) -> None:
             message.reply_text("Could not connect to mosquitto server")
             return
 
-        thermo = my_devices.MQTT_Device(config.thermo_id, config.mqtt_user, config.mqtt_pass)
-        thermo.set_ssh_handle(ssh)
+        args = command.split(" ", 2)
 
-        args = command.split(" ", 1)
-
-        if len(args) != 2:
-            res = thermo.status()
-            message.reply_text("thermo status is " + res)
+        if len(args) == 1:
+            # no device provided, list devices
+            res = "list of configured devices:"
+            for dev in config.dev_list:
+                res += "\n * " + dev
         else:
-            cmd = args[1]
+            if args[1] in config.dev_list:
+                dev = config.dev_list[args[1]]
+                my_dev = my_devices.MQTT_Device(dev[0], config.mqtt_user, config.mqtt_pass)
+                my_dev.set_ssh_handle(ssh)
+                if len(args) == 2:
+                    # only device provided, get status
+                    res = args[1] + " status is " + my_dev.status()
+                else:
+                    # issue command to device
+                    cmd = args[2]
 
-            if cmd == "ON" or cmd == "on":
-                res = thermo.set_on()
-            elif cmd == "OFF" or cmd == "off":
-                res = thermo.set_off()
+                    if cmd == "ON" or cmd == "on":
+                        my_dev.set_on()
+                        res = args[1] + " status is " + my_dev.status()
+                    elif cmd == "OFF" or cmd == "off":
+                        my_dev.set_off()
+                        res = args[1] + " status is " + my_dev.status()
+                    else:
+                        res = "Wrong Command"
+            elif args[1] == "status":
+                # get status from all devices
+                res = "status of configured devices:\n"
+                for dev in config.dev_list:
+                    my_dev = my_devices.MQTT_Device(config.dev_list[dev][0], config.mqtt_user, config.mqtt_pass)
+                    my_dev.set_ssh_handle(ssh)
+                    res += dev + " status is " + my_dev.status()
             else:
-                res = "Wrong Command"
+                res = "device not configured"
 
-            if res != "":
-                message.reply_text(res)
+        if res != "":
+            message.reply_text(res)
 
         ssh.close()
     except Exception as e:
@@ -429,7 +448,7 @@ def main() -> None:
     dispatcher.add_handler(CommandHandler("query_alarms", query_alarms_cmd))
     dispatcher.add_handler(CommandHandler("delete_alarm", delete_alarm_cmd))
     dispatcher.add_handler(CommandHandler("help", help_cmd))
-    dispatcher.add_handler(CommandHandler("thermo", thermo_cmd))
+    dispatcher.add_handler(CommandHandler("dev", dev_cmd))
 
     dispatcher.add_handler(MessageHandler(Filters.command, unknown_cmd))
 
