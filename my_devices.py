@@ -20,6 +20,9 @@ class MQTT_Device:
             channel1 = transport.open_session()
             channel2 = transport.open_session()
 
+            channel1.settimeout(10)
+            channel2.settimeout(10)
+
             channel1.exec_command("mosquitto_sub -u " + self.mosq_user + " -P " + self.mosq_pass + " -t 'stat/" + self.mqtt_id + "' -C 1")
             channel2.exec_command("mosquitto_pub -u " + self.mosq_user + " -P " + self.mosq_pass + " -t 'cmnd/" + self.mqtt_id + "' -m '' > /dev/null")
 
