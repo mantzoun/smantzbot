@@ -30,6 +30,9 @@ class MQTT_Device:
         except Exception as e:
             res = str(e)
 
+        if len(res) == 0:
+            res = "offline\n"
+
         return res
 
     def set_on(self) -> str:
